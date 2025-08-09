@@ -1,0 +1,202 @@
+{
+  "id": "IjJX9tJR4IPL76oa",
+  "name": "Equipment Management Complete v3.1 - Fixed SSH",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "equipment-complete",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "A",
+      "name": "Webhook Reception",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// 요청 데이터 로깅 및 파싱\nconst requestData = $json;\nconsole.log('📥 Webhook 수신:', JSON.stringify(requestData, null, 2));\n\n// 필요한 데이터 추출\nconst sessionId = requestData.sessionId || 'default-session';\nconst message = requestData.message || '';\nconst intent = requestData.intent || {};\nconst entities = requestData.entities || {};\n\n// 반환할 데이터 구성\nreturn {\n  sessionId,\n  message,\n  intent,\n  entities,\n  timestamp: new Date().toISOString(),\n  workflowId: 'IjJX9tJR4IPL76oa'\n};"
+      },
+      "id": "B",
+      "name": "Request Parser",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://automation-llm-service:8301/api/v1/llm/chat",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "{\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"당신은 IT 인프라 관리 전문가입니다. 사용자의 요청을 분석하여 다음 형태로 응답하세요:\\n\\n{\\n  \\\"action\\\": \\\"monitor_memory|monitor_cpu|monitor_disk|restart_service|check_logs\\\",\\n  \\\"target_device\\\": \\\"장비명\\\",\\n  \\\"command_type\\\": \\\"system_info|service_control|log_analysis\\\",\\n  \\\"details\\\": \\\"추가 세부사항\\\"\\n}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"={{ $json.message }}\"\n    }\n  ],\n  \"model\": \"gpt-4\",\n  \"temperature\": 0.1\n}",
+        "options": {}
+      },
+      "id": "C",
+      "name": "LLM Provider Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// LLM 응답 파싱\nconst llmResponse = $json;\nconsole.log('🤖 LLM 응답:', JSON.stringify(llmResponse, null, 2));\n\n// LLM 응답에서 content 추출\nlet parsedIntent = {};\ntry {\n  const content = llmResponse.choices?.[0]?.message?.content || llmResponse.content || '{}';\n  console.log('📝 Content:', content);\n  \n  // JSON 파싱 시도\n  parsedIntent = JSON.parse(content);\n} catch (error) {\n  console.log('⚠️ JSON 파싱 실패, 기본값 사용:', error.message);\n  parsedIntent = {\n    action: 'monitor_memory',\n    target_device: '1',\n    command_type: 'system_info',\n    details: 'memory usage check'\n  };\n}\n\n// 이전 데이터와 병합\nconst previousData = $items()[0].json;\nreturn {\n  ...previousData,\n  parsedIntent,\n  action: parsedIntent.action || 'monitor_memory',\n  targetDevice: parsedIntent.target_device || '1'\n};"
+      },
+      "id": "D",
+      "name": "Intent Parser",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://automation-device-service:8101/api/v1/devices/by-name/={{ $json.targetDevice }}",
+        "options": {},
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "E",
+      "name": "Device DB Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Device 정보와 Connection 정보 병합\nconst deviceData = $json;\nconst previousData = $items()[0].json;\n\nconsole.log('🖥️ 장비 정보:', JSON.stringify(deviceData, null, 2));\n\n// 장비가 존재하는지 확인\nif (!deviceData || !deviceData.id) {\n  throw new Error(`장비 '${previousData.targetDevice}'를 찾을 수 없습니다.`);\n}\n\nreturn {\n  ...previousData,\n  deviceInfo: deviceData,\n  deviceId: deviceData.id,\n  deviceName: deviceData.name,\n  connectionReady: true\n};"
+      },
+      "id": "F",
+      "name": "Device Info Processor",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://automation-device-service:8101/api/v1/internal/devices/by-name/={{ $json.targetDevice }}/connection",
+        "options": {},
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "G",
+      "name": "Get Connection Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// SSH 연결 설정 - sshpass 사용으로 수정\nconst connectionInfo = $json;\nconst previousData = $items()[0].json;\n\nconsole.log('🔐 연결 정보:', JSON.stringify(connectionInfo, null, 2));\n\n// 연결 정보 검증\nif (!connectionInfo.password || !connectionInfo.username || !connectionInfo.host) {\n  throw new Error('연결 정보가 불완전합니다.');\n}\n\n// Action에 따른 명령어 설정\nlet command = 'free -h'; // 기본값\nswitch (previousData.action) {\n  case 'monitor_memory':\n    command = 'free -h';\n    break;\n  case 'monitor_cpu':\n    command = 'top -bn1 | head -20';\n    break;\n  case 'monitor_disk':\n    command = 'df -h';\n    break;\n  case 'check_logs':\n    command = 'tail -50 /var/log/syslog';\n    break;\n  default:\n    command = 'free -h';\n}\n\n// ⭐ 핵심 수정: sshpass 사용한 SSH 명령어 구성\nconst sshCommand = `sshpass -p \"${connectionInfo.password}\" ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no ${connectionInfo.username}@${connectionInfo.host} \"${command}\"`;\n\nconsole.log('🔧 SSH 명령어 생성 완료 (sshpass 사용)');\n\n// MCP 실행을 위한 설정\nconst mcpConfig = {\n  serverId: 'cbda6dfa-78a7-41a3-9986-869239873a72', // desktop-commander\n  tool: 'start_process',\n  params: {\n    command: sshCommand,\n    timeout_ms: 15000\n  },\n  async: false\n};\n\nreturn {\n  ...previousData,\n  connectionInfo,\n  sshCommand,\n  mcpConfig,\n  executeCommand: command\n};"
+      },
+      "id": "L",
+      "name": "SSH Connection Setup",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://automation-mcp-service:8201/api/v1/mcp/execute",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "{\n  \"serverId\": \"={{ $json.mcpConfig.serverId }}\",\n  \"tool\": \"={{ $json.mcpConfig.tool }}\",\n  \"params\": \"={{ JSON.stringify($json.mcpConfig.params) }}\",\n  \"async\": false\n}",
+        "options": {}
+      },
+      "id": "H",
+      "name": "MCP Tool Execution",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// MCP 실행 결과 처리\nconst mcpResult = $json;\nconst previousData = $items()[0].json;\n\nconsole.log('⚡ MCP 실행 결과:', JSON.stringify(mcpResult, null, 2));\n\n// 실행 결과 분석\nlet executionSuccess = false;\nlet outputData = '';\nlet errorInfo = null;\n\nif (mcpResult && mcpResult.success) {\n  executionSuccess = true;\n  outputData = mcpResult.result?.output || mcpResult.output || '';\n  console.log('✅ MCP 실행 성공');\n} else {\n  errorInfo = mcpResult.error || 'MCP 실행 실패';\n  console.log('❌ MCP 실행 실패:', errorInfo);\n}\n\n// 응답 데이터 구성\nconst responseData = {\n  sessionId: previousData.sessionId,\n  workflowId: previousData.workflowId,\n  success: executionSuccess,\n  action: previousData.action,\n  targetDevice: previousData.targetDevice,\n  command: previousData.executeCommand,\n  output: outputData,\n  error: errorInfo,\n  timestamp: new Date().toISOString()\n};\n\nreturn responseData;"
+      },
+      "id": "I",
+      "name": "Result Processor",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2050, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://automation-llm-service:8301/api/v1/llm/chat",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "{\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"당신은 IT 시스템 관리자입니다. 명령어 실행 결과를 사용자에게 친근하고 명확하게 설명해주세요. 기술적인 내용을 일반인도 이해할 수 있게 해석해주세요.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"장비: {{ $json.targetDevice }}\\n명령어: {{ $json.command }}\\n실행 결과:\\n{{ $json.output }}\\n\\n위 결과를 해석해서 사용자에게 설명해주세요.\"\n    }\n  ],\n  \"model\": \"gpt-4\",\n  \"temperature\": 0.3\n}",
+        "options": {}
+      },
+      "id": "J",
+      "name": "Response Generator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2250, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// 최종 응답 구성\nconst llmResponse = $json;\nconst previousData = $items()[0].json;\n\n// LLM 응답 추출\nlet finalResponse = '';\ntry {\n  finalResponse = llmResponse.choices?.[0]?.message?.content || llmResponse.content || '시스템 상태 확인이 완료되었습니다.';\n} catch (error) {\n  finalResponse = '시스템 상태 확인이 완료되었습니다.';\n}\n\n// 최종 응답 데이터\nconst finalResult = {\n  sessionId: previousData.sessionId,\n  success: previousData.success,\n  response: finalResponse,\n  executionDetails: {\n    workflowId: previousData.workflowId,\n    targetDevice: previousData.targetDevice,\n    action: previousData.action,\n    rawOutput: previousData.output,\n    timestamp: previousData.timestamp\n  }\n};\n\nconsole.log('🎯 최종 응답:', JSON.stringify(finalResult, null, 2));\n\nreturn finalResult;"
+      },
+      "id": "K",
+      "name": "Final Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2450, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Reception": {
+      "main": [[{"node": "Request Parser", "type": "main", "index": 0}]]
+    },
+    "Request Parser": {
+      "main": [[{"node": "LLM Provider Call", "type": "main", "index": 0}]]
+    },
+    "LLM Provider Call": {
+      "main": [[{"node": "Intent Parser", "type": "main", "index": 0}]]
+    },
+    "Intent Parser": {
+      "main": [[{"node": "Device DB Query", "type": "main", "index": 0}]]
+    },
+    "Device DB Query": {
+      "main": [[{"node": "Device Info Processor", "type": "main", "index": 0}]]
+    },
+    "Device Info Processor": {
+      "main": [[{"node": "Get Connection Info", "type": "main", "index": 0}]]
+    },
+    "Get Connection Info": {
+      "main": [[{"node": "SSH Connection Setup", "type": "main", "index": 0}]]
+    },
+    "SSH Connection Setup": {
+      "main": [[{"node": "MCP Tool Execution", "type": "main", "index": 0}]]
+    },
+    "MCP Tool Execution": {
+      "main": [[{"node": "Result Processor", "type": "main", "index": 0}]]
+    },
+    "Result Processor": {
+      "main": [[{"node": "Response Generator", "type": "main", "index": 0}]]
+    },
+    "Response Generator": {
+      "main": [[{"node": "Final Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
